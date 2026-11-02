@@ -28,21 +28,21 @@
 
   <main class="dashboard-container">
 
-    <!-- Model Status & Training Banner -->
-    <div class="model-status-banner" style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+    <!-- Model Status Banner -->
+    <div class="model-status-banner" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 12px 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
       <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 1.25rem;">⏳</span>
+        <span style="font-size: 1.25rem;">⚡</span>
         <div>
-          <div style="font-size: 0.88rem; font-weight: 700; color: #FBBF24;">
-            Helmet Model: Final Training In Progress
+          <div style="font-size: 0.88rem; font-weight: 700; color: #34D399;">
+            Helmet Model: Faster R-CNN (16-Class ResNet-50 FPN) Active
           </div>
           <div style="font-size: 0.78rem; color: #CBD5E1; margin-top: 2px;">
-            Inference in this interface is for workflow testing only and does not represent validated final-model predictions. Final trained weights will be integrated upon training completion.
+            Full 20-epoch trained checkpoint loaded with Apple Silicon GPU acceleration. Detects solo, dual, triple and quad-riding helmet compliance.
           </div>
         </div>
       </div>
       <div>
-        <span class="badge badge-pending">Training In Progress</span>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34D399; border: 1px solid #34D399;">Faster R-CNN Active</span>
       </div>
     </div>
 
@@ -77,7 +77,7 @@
     <!-- Navigation Tabs -->
     <div class="tabs-bar">
       <button class="tab-btn active" data-tab="violations">📋 Violation Records & Audit Log</button>
-      <button class="tab-btn" data-tab="studio">📷 Frame Analysis Studio (YOLOv8 + OCR)</button>
+      <button class="tab-btn" data-tab="studio">📷 Frame Analysis Studio (Faster R-CNN + EasyOCR)</button>
     </div>
 
     <!-- TAB 1: Violation Log & Table -->

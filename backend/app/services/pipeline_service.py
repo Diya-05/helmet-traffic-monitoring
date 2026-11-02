@@ -23,9 +23,9 @@ EVIDENCE_DIR = os.path.join(
 )
 os.makedirs(EVIDENCE_DIR, exist_ok=True)
 
-# Path reserved for when final trained weights arrive
-FINAL_TRAINED_WEIGHTS_PATH = os.path.join(
-    ROOT_DIR, "helmet", "weights", "helmet_trained_final.pt"
+# Path to the primary trained Faster R-CNN checkpoint
+FRCNN_CHECKPOINT_PATH = os.path.join(
+    ROOT_DIR, "checkpoints", "frcnn_16class_best.pth"
 )
 
 
@@ -57,20 +57,18 @@ class MockHelmetDetector(BaseHelmetDetector):
         return list(self.test_detections)
 
 
-class LiveHelmetDetector(BaseHelmetDetector):
-    """Executes helmet detection using local YOLOv8 weights or final trained weights."""
+class FasterRCNNLiveDetector(BaseHelmetDetector):
+    """Executes helmet detection using trained Faster R-CNN 16-class ResNet-50 FPN model."""
 
     def __init__(self, weights_path: Optional[str] = None):
-        from helmet.detector import detect_helmets
-        self._detect_fn = detect_helmets
-        self.weights_path = weights_path
+        from helmet.frcnn_detector import FasterRCNNHelmetDetector
+        self.detector = FasterRCNNHelmetDetector(
+            weights_path=weights_path or FRCNN_CHECKPOINT_PATH,
+            lazy_load=True,
+        )
 
     def predict(self, image: np.ndarray, conf_threshold: float = 0.25) -> list[dict]:
-        return self._detect_fn(
-            image,
-            conf_threshold=conf_threshold,
-            weights_path=self.weights_path,
-        )
+        return self.detector.predict(image, conf_threshold=conf_threshold)
 
 
 def get_helmet_detector(
@@ -79,21 +77,21 @@ def get_helmet_detector(
 ) -> tuple[BaseHelmetDetector, str, bool]:
     """Factory function returning the active detector, status message, and mock flag.
 
-    - When final trained weights exist at FINAL_TRAINED_WEIGHTS_PATH, they are used.
-    - If force_mock is requested or final model is not yet trained, mock/interim mode is used.
+    Faster R-CNN (16-Class ResNet-50 FPN) is the ONLY active model for helmet detection.
     """
     if force_mock:
         return MockHelmetDetector(test_detections=test_detections), "mock_inference_mode", True
 
-    if os.path.exists(FINAL_TRAINED_WEIGHTS_PATH):
-        return LiveHelmetDetector(FINAL_TRAINED_WEIGHTS_PATH), "final_trained_model_active", False
+    if os.path.isfile(FRCNN_CHECKPOINT_PATH):
+        try:
+            detector = FasterRCNNLiveDetector(FRCNN_CHECKPOINT_PATH)
+            return detector, "faster_rcnn_16class_active", False
+        except Exception as err:
+            print(f"Faster R-CNN initialization error: {err}")
+            return MockHelmetDetector(test_detections=test_detections), "mock_fallback_mode", True
 
-    # Default to available interim weights or fallback cleanly
-    try:
-        detector = LiveHelmetDetector()
-        return detector, "interim_weights_unverified", False
-    except Exception:
-        return MockHelmetDetector(test_detections=test_detections), "mock_fallback_mode", True
+    # Fallback to transparent mock if checkpoint is missing
+    return MockHelmetDetector(test_detections=test_detections), "mock_fallback_mode", True
 
 
 # ---------------------------------------------------------------------------
@@ -109,30 +107,36 @@ def annotate_frame(
     """Draw bounding boxes and labels for detected helmets and license plates."""
     annotated = image.copy()
 
-    # Draw helmet / head detections
+    # Draw Faster R-CNN rider & helmet detections
     for item in helmet_detections:
         x1, y1, x2, y2 = item["box"]
-        label = item["label"]
-        conf = item["confidence"]
-        is_compliant = "with" in label.lower() and "without" not in label.lower()
+        label = item.get("readable_label", item.get("label", "Helmet"))
+        conf = item.get("confidence", 0.0)
 
-        color = (0, 210, 0) if is_compliant else (0, 0, 220)
+        # Violation if NoHelmet or overcrowding (>= 3 riders)
+        is_violation = (
+            item.get("is_violation", False)
+            or "nohelmet" in item.get("label", "").lower()
+            or "without" in item.get("label", "").lower()
+            or item.get("rider_count", 1) >= 3
+        )
+
+        color = (0, 0, 220) if is_violation else (0, 210, 0)
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
 
         prefix = "[MOCK] " if is_mock else ""
-        clean_label = "With Helmet" if is_compliant else "Without Helmet"
-        tag = f"{prefix}Helmet: {clean_label} ({conf:.2f})"
+        tag = f"{prefix}{label} ({conf:.2f})"
         cv2.putText(
             annotated,
             tag,
             (x1, max(y1 - 10, 20)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
+            0.50,
             color,
             2,
         )
 
-    # Draw license plate detections
+    # Draw license plate detections (YOLO + EasyOCR)
     for plate in plate_detections:
         x1, y1, x2, y2 = plate["plate_box"]
         plate_text = plate.get("plate_text") or "Plate"
@@ -167,55 +171,65 @@ def analyze_traffic_image(
     """Execute model inference workflow:
 
     1. Validates and decodes image bytes.
-    2. Runs helmet detector (live or mock).
+    2. Runs Faster R-CNN 16-class helmet detector.
     3. Runs license-plate detector + EasyOCR.
-    4. Evaluates compliance.
+    4. Evaluates compliance & violations.
     5. Saves annotated evidence image.
     6. Persists structured record into PostgreSQL.
     """
+    start_time = time.time()
+
     np_arr = np.frombuffer(image_bytes, np.uint8)
     image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("Invalid or corrupted image format. Unable to decode image.")
 
-    # 1. Helmet Detection
+    # 1. Faster R-CNN Helmet & Rider Detection
     detector, model_status, is_mock = get_helmet_detector(
         force_mock=force_mock,
         test_detections=test_detections,
     )
     helmet_detections = detector.predict(image, conf_threshold=conf_threshold)
 
-    # 2. License Plate Detection & OCR
+    # 2. License Plate Detection & OCR (preserved)
     plate_detections = []
     try:
         from number_plate.pipeline import process_traffic_image
         plate_detections = process_traffic_image(image, conf_threshold=conf_threshold)
     except Exception as err:
         # Graceful fallback if OCR is unavailable or fails
+        print(f"License plate pipeline notice: {err}")
         plate_detections = []
 
     # 3. Compliance Decision Logic
-    has_without_helmet = any(
-        "without" in d["label"].lower() for d in helmet_detections
+    has_violation = any(
+        d.get("is_violation", False)
+        or "nohelmet" in d.get("label", "").lower()
+        or "without" in d.get("label", "").lower()
+        or d.get("rider_count", 1) >= 3
+        for d in helmet_detections
     )
-    has_with_helmet = any(
-        "with" in d["label"].lower() and "without" not in d["label"].lower()
+    has_compliant = any(
+        not d.get("is_violation", False)
+        and ("helmet" in d.get("label", "").lower() or "with" in d.get("label", "").lower())
+        and "without" not in d.get("label", "").lower()
+        and "nohelmet" not in d.get("label", "").lower()
         for d in helmet_detections
     )
 
-    if has_without_helmet:
+    if has_violation:
         helmet_detected = False
         review_status = "pending"
-    elif has_with_helmet:
+    elif has_compliant:
         helmet_detected = True
         review_status = "approved"
     else:
         helmet_detected = True
         review_status = "approved"
 
-    # 4. Extract Primary License Plate Text
+    # 4. Extract Primary License Plate Text (never invent)
     recognized_plates = [
-        p["plate_text"] for p in plate_detections if p.get("plate_text")
+        p["plate_text"] for p in plate_detections if p.get("plate_text") and p.get("plate_text").strip()
     ]
     primary_plate = recognized_plates[0] if recognized_plates else None
 
@@ -242,19 +256,34 @@ def analyze_traffic_image(
     db.refresh(violation)
 
     # 7. Summary Message
+    reasons = []
+    for d in helmet_detections:
+        if d.get("violation_reasons"):
+            reasons.extend(d["violation_reasons"])
+        elif "without" in d.get("label", "").lower() or "nohelmet" in d.get("label", "").lower():
+            reasons.append("Rider without helmet")
+        elif d.get("rider_count", 1) >= 3:
+            reasons.append(f"Illegal overload ({d.get('rider_count')} riders)")
+
+    # Remove duplicates preserving order
+    reasons = list(dict.fromkeys(reasons))
+
     if is_mock:
-        if has_without_helmet:
-            summary = f"[Simulated Test] Simulated violation (no helmet). Plate: {primary_plate or 'None'}"
-        elif has_with_helmet:
+        if has_violation:
+            summary = f"[Simulated Test] Simulated violation ({'; '.join(reasons) or 'no helmet'}). Plate: {primary_plate or 'None'}"
+        elif has_compliant:
             summary = f"[Simulated Test] Simulated compliant. Plate: {primary_plate or 'None'}"
         else:
-            summary = f"[Simulated Test] Model training in progress (no helmet detected). Plate: {primary_plate or 'None'}"
-    elif not helmet_detected:
-        summary = f"Potential violation: Rider without helmet. Plate: {primary_plate or 'Unreadable'}"
-    elif has_with_helmet:
+            summary = f"[Simulated Test] Model running in test mode. Plate: {primary_plate or 'None'}"
+    elif has_violation:
+        reason_str = "; ".join(reasons) if reasons else "Rider without helmet"
+        summary = f"Potential violation: {reason_str}. Plate: {primary_plate or 'Unreadable'}"
+    elif has_compliant:
         summary = f"Compliant: Rider wearing helmet. Plate: {primary_plate or 'Unreadable'}"
     else:
         summary = f"No riders identified in frame. Plate: {primary_plate or 'None'}"
+
+    elapsed_ms = round((time.time() - start_time) * 1000, 1)
 
     return {
         "violation": {
@@ -269,8 +298,13 @@ def analyze_traffic_image(
         "helmet_classification": [
             {
                 "box": d["box"],
-                "label": d["label"],
+                "label": d.get("label"),
+                "readable_label": d.get("readable_label", d.get("label")),
                 "confidence": d["confidence"],
+                "class_id": d.get("class_id"),
+                "rider_count": d.get("rider_count", 1),
+                "is_violation": d.get("is_violation", False),
+                "violation_reasons": d.get("violation_reasons", []),
             }
             for d in helmet_detections
         ],
@@ -290,4 +324,5 @@ def analyze_traffic_image(
         "is_mock_inference": is_mock,
         "model_status": model_status,
         "summary": summary,
+        "processing_time_ms": elapsed_ms,
     }

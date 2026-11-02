@@ -16,6 +16,10 @@ __pycache__/
 !.env.example
 !backend/.env.example
 
+# Large model weights (exceeds GitHub 100MB limit; verify with checkpoints/SHA256SUMS.txt)
+*.pth
+checkpoints/*.pth
+
 # Datasets and generated output
 datasets/
 dataset/

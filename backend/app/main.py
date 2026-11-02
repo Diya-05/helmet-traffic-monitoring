@@ -117,6 +117,7 @@ class AnalyzeResultResponse(BaseModel):
     is_mock_inference: bool
     model_status: str
     summary: str
+    processing_time_ms: Optional[float] = None
 
 
 # ---------------------------------------------------------

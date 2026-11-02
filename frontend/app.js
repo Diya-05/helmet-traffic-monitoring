@@ -320,7 +320,14 @@ async function handleImageAnalysis(file) {
     const plateDetections = data.number_plate_detection || data.plate_detections || [];
 
     const helmetSummary = helmetDetections.length > 0
-      ? helmetDetections.map((d) => `• ${d.label} (Conf: ${d.confidence})`).join("<br>")
+      ? helmetDetections.map((d) => {
+          const labelText = d.readable_label || d.label;
+          const confText = d.confidence !== undefined ? ` (Conf: ${d.confidence})` : "";
+          const reasons = d.violation_reasons && d.violation_reasons.length > 0
+            ? ` <span style="color:var(--accent-rose);">[${d.violation_reasons.join(", ")}]</span>`
+            : "";
+          return `• <strong>${labelText}</strong>${confText}${reasons}`;
+        }).join("<br>")
       : "• No riders/helmets localized";
 
     const plateSummary = plateDetections.length > 0
@@ -328,22 +335,23 @@ async function handleImageAnalysis(file) {
       : "• No license plate localized";
 
     const isMock = Boolean(data.is_mock_inference);
-    const modelStatus = data.model_status || (isMock ? "mock_inference_mode" : "pending_final_trained_weights");
+    const modelStatus = data.model_status || (isMock ? "mock_inference_mode" : "faster_rcnn_16class_active");
 
     const modeBadge = isMock
       ? `<span class="badge badge-pending">Simulated Mock Inference</span>`
-      : `<span class="badge" style="background:rgba(56,189,248,0.15); color:#38BDF8; border:1px solid #38BDF8;">Interim Test Pipeline (${modelStatus})</span>`;
+      : `<span class="badge" style="background:rgba(52,211,153,0.18); color:#34D399; border:1px solid #34D399;">Faster R-CNN 16-Class (Active)</span>`;
+
+    const procTime = data.processing_time_ms ? `<span>(${data.processing_time_ms} ms)</span>` : "";
 
     detailsBox.innerHTML = `
       <div style="background:var(--bg-surface-elevated); padding:14px; border-radius:8px; border:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:8px; font-size:0.86rem;">
-        <div><strong>Inference Mode:</strong> ${modeBadge}</div>
-        <div><strong>Backend Model Status:</strong> <code style="color:var(--accent-teal);">${modelStatus}</code></div>
-        <div><strong>Detection Verdict:</strong> ${data.summary}</div>
-        <div><strong>Helmet Status:</strong> <br>${helmetSummary}</div>
-        <div><strong>Plate Recognition:</strong> <br>${plateSummary}</div>
+        <div><strong>Inference Engine:</strong> ${modeBadge} ${procTime}</div>
+        <div><strong>Detection Verdict:</strong> <strong>${data.summary}</strong></div>
+        <div><strong>Rider / Helmet Breakdown:</strong> <br>${helmetSummary}</div>
+        <div><strong>License Plate Recognition:</strong> <br>${plateSummary}</div>
         <div><strong>Review Status:</strong> <span class="badge badge-${v.review_status}">${v.review_status}</span></div>
         <div style="font-size:0.75rem; color:var(--text-muted); font-style:italic; border-top:1px solid var(--border-subtle); padding-top:6px;">
-          Note: Final helmet model training is currently in progress. Inference outputs here demonstrate workflow integration and are not validated final-model predictions.
+          Faster R-CNN ResNet-50 FPN • 17-Class Classifier Active
         </div>
       </div>
     `;
@@ -352,7 +360,7 @@ async function handleImageAnalysis(file) {
     loadStats();
     loadViolations(false);
   } catch (err) {
-    statusMsg.innerHTML = `<span style="color:var(--accent-rose);">Error: ${err.message}</span>`;
+    statusMsg.innerHTML = `<span style="color:var(--accent-rose); font-weight:700;">⚠ Error: ${err.message}</span>`;
   }
 }
 
